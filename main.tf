@@ -13,128 +13,62 @@ provider "azurerm" {
   features {}
 }
 
-# Crear un grupo de recursos
+# Crear grupo de recursos
 resource "azurerm_resource_group" "main" {
-  name     = "rg-vm-terraform"
-  location = "East US"
+  name     = var.resource_group_name
+  location = var.location
 }
 
-# Crear una red virtual
-resource "azurerm_virtual_network" "main" {
-  name                = "vnet-terraform"
-  address_space       = ["10.0.0.0/16"]
-  location            = azurerm_resource_group.main.location
+# Módulo de networking
+module "networking" {
+  source = "./modules/networking"
+  
   resource_group_name = azurerm_resource_group.main.name
+  location           = azurerm_resource_group.main.location
+  vnet_name          = var.vnet_name
+  address_space      = var.address_space
+  subnet_name        = var.subnet_name
+  subnet_address     = var.subnet_address
 }
 
-# Crear una subred
-resource "azurerm_subnet" "internal" {
-  name                 = "subnet-internal"
-  resource_group_name  = azurerm_resource_group.main.name
-  virtual_network_name = azurerm_virtual_network.main.name
-  address_prefixes     = ["10.0.2.0/24"]
-}
-
-# Crear IP pública
-resource "azurerm_public_ip" "main" {
-  name                = "pip-terraform-vm"
+# Módulo de seguridad
+module "security" {
+  source = "./modules/security"
+  
   resource_group_name = azurerm_resource_group.main.name
-  location            = azurerm_resource_group.main.location
-  allocation_method   = "Static"
-  sku                = "Standard"
+  location           = azurerm_resource_group.main.location
+  nsg_name           = var.nsg_name
+  allowed_ports      = var.allowed_ports
 }
 
-# Crear Network Security Group y regla para RDP/SSH
-resource "azurerm_network_security_group" "main" {
-  name                = "nsg-terraform-vm"
-  location            = azurerm_resource_group.main.location
-  resource_group_name = azurerm_resource_group.main.name
-
-  # Regla para RDP (Windows) - Puerto 3389
-  security_rule {
-    name                       = "RDP"
-    priority                   = 1001
-    direction                  = "Inbound"
-    access                     = "Allow"
-    protocol                   = "Tcp"
-    source_port_range          = "*"
-    destination_port_range     = "3389"
-    source_address_prefix      = "*"
-    destination_address_prefix = "*"
-  }
-
-  # Regla para SSH (Linux) - Puerto 22
-  security_rule {
-    name                       = "SSH"
-    priority                   = 1002
-    direction                  = "Inbound"
-    access                     = "Allow"
-    protocol                   = "Tcp"
-    source_port_range          = "*"
-    destination_port_range     = "22"
-    source_address_prefix      = "*"
-    destination_address_prefix = "*"
-  }
+# Módulo de compute
+module "compute" {
+  source = "./modules/compute"
+  
+  resource_group_name   = azurerm_resource_group.main.name
+  location             = azurerm_resource_group.main.location
+  vm_name              = var.vm_name
+  vm_size              = var.vm_size
+  admin_username       = var.admin_username
+  admin_password       = var.admin_password
+  subnet_id            = module.networking.subnet_id
+  network_security_group_id = module.security.nsg_id
+  
+  depends_on = [module.networking, module.security]
 }
 
-# Crear interfaz de red
-resource "azurerm_network_interface" "main" {
-  name                = "nic-terraform-vm"
-  location            = azurerm_resource_group.main.location
-  resource_group_name = azurerm_resource_group.main.name
-
-  ip_configuration {
-    name                          = "internal"
-    subnet_id                     = azurerm_subnet.internal.id
-    private_ip_address_allocation = "Dynamic"
-    public_ip_address_id          = azurerm_public_ip.main.id
-  }
-}
-
-# Asociar Network Security Group a la interfaz de red
-resource "azurerm_network_interface_security_group_association" "main" {
-  network_interface_id      = azurerm_network_interface.main.id
-  network_security_group_id = azurerm_network_security_group.main.id
-}
-
-# Crear máquina virtual Windows
-resource "azurerm_windows_virtual_machine" "main" {
-  name                = "vm-terraform"
-  resource_group_name = azurerm_resource_group.main.name
-  location            = azurerm_resource_group.main.location
-  size                = var.vm_size
-  admin_username      = var.admin_username
-  admin_password      = var.admin_password
-
-  network_interface_ids = [
-    azurerm_network_interface.main.id,
-  ]
-
-  os_disk {
-    caching              = "ReadWrite"
-    storage_account_type = "Premium_LRS"
-  }
-
-  source_image_reference {
-    publisher = "MicrosoftWindowsServer"
-    offer     = "WindowsServer"
-    sku       = "2022-Datacenter"
-    version   = "latest"
-  }
-}
-
-# Outputs para obtener información de la VM
-output "public_ip_address" {
-  description = "Dirección IP pública de la máquina virtual"
-  value       = azurerm_public_ip.main.ip_address
+# Outputs principales
+output "vm_public_ip" {
+  description = "IP pública de la máquina virtual"
+  value       = module.compute.public_ip_address
 }
 
 output "vm_name" {
   description = "Nombre de la máquina virtual"
-  value       = azurerm_windows_virtual_machine.main.name
+  value       = module.compute.vm_name
 }
 
 output "admin_username" {
-  description = "Nombre de usuario administrador"
+  description = "Usuario administrador"
   value       = var.admin_username
 }
